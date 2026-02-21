@@ -99,6 +99,16 @@ func _ready():
 	get_parent().add_child.call_deferred(reporter)
 	reporter.setup.call_deferred(gridmap, view_camera)
 
+	# Minimap
+	var minimap_script := load("res://scripts/minimap.gd")
+	var minimap := Control.new()
+	minimap.name = "Minimap"
+	minimap.set_script(minimap_script)
+	minimap.set_anchors_preset(Control.PRESET_FULL_RECT)
+	minimap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	get_parent().add_child.call_deferred(minimap)
+	minimap.setup.call_deferred(city_gen.plan, city_gen.grid_size, city_gen.Cell)
+
 	# Atmosphere (day/night + fog)
 	var atmo_script := load("res://scripts/atmosphere.gd")
 	var atmo := Node.new()

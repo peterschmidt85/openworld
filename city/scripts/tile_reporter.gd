@@ -15,6 +15,7 @@ var selection_overlays: Array[MeshInstance3D] = []
 var selection_mat: StandardMaterial3D = null
 
 var help_panel: PanelContainer = null
+var help_hint: Label = null
 
 var session_id: int = 0
 var session_path: String = ""
@@ -160,6 +161,7 @@ func _input(event: InputEvent) -> void:
 	# H → toggle help
 	if event is InputEventKey and event.pressed and event.keycode == KEY_H and not text_input.visible:
 		help_panel.visible = not help_panel.visible
+		help_hint.visible = not help_panel.visible
 		get_viewport().set_input_as_handled()
 		return
 
@@ -289,11 +291,23 @@ func _create_help_panel(canvas: CanvasLayer) -> void:
 		+ "\n"
 		+ "  N                Toggle day / night\n"
 		+ "  F                Toggle fog\n"
+		+ "  M                Toggle minimap\n"
 		+ "\n"
 		+ "  H                Toggle this help"
 	)
 	help_panel.add_child(label)
+	help_panel.visible = false
 	canvas.add_child(help_panel)
+
+	help_hint = Label.new()
+	help_hint.add_theme_font_size_override("font_size", 12)
+	help_hint.add_theme_color_override("font_color", Color(0.7, 0.7, 0.65, 0.6))
+	help_hint.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.5))
+	help_hint.add_theme_constant_override("shadow_offset_x", 1)
+	help_hint.add_theme_constant_override("shadow_offset_y", 1)
+	help_hint.text = "H — help"
+	help_hint.position = Vector2(14, 14)
+	canvas.add_child(help_hint)
 
 
 # =========================================================
