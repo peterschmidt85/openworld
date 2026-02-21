@@ -19,7 +19,6 @@ var animation_player: AnimationPlayer = null
 
 func _ready() -> void:
 	add_to_group("player")
-	# Find model and animation player (added dynamically by spawner)
 	call_deferred("_find_model")
 
 
@@ -28,6 +27,11 @@ func _find_model() -> void:
 	if model:
 		animation_player = _find_anim_player(model)
 		if animation_player:
+			for anim_name in ["walk", "sprint", "idle"]:
+				if animation_player.has_animation(anim_name):
+					var anim: Animation = animation_player.get_animation(anim_name)
+					if anim.loop_mode == Animation.LOOP_NONE:
+						anim.loop_mode = Animation.LOOP_LINEAR
 			print("Player animation player found with ", animation_player.get_animation_list().size(), " animations")
 
 	nav_agent = get_node_or_null("NavAgent")
@@ -44,15 +48,11 @@ func _find_anim_player(node: Node) -> AnimationPlayer:
 
 
 func _physics_process(delta: float) -> void:
-	# Gravity
 	if not is_on_floor():
 		velocity.y -= gravity * delta
 
-	# --- Input ---
 	var input_dir := Vector3.ZERO
-	var is_keyboard := false
 
-	# WASD (camera-relative)
 	var raw_input := Vector2.ZERO
 	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):    raw_input.y -= 1
 	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):  raw_input.y += 1
@@ -61,10 +61,8 @@ func _physics_process(delta: float) -> void:
 
 	if raw_input.length() > 0:
 		raw_input = raw_input.normalized()
-		is_keyboard = true
 		has_move_target = false
 
-		# Get camera direction for relative movement
 		var cam := get_viewport().get_camera_3d()
 		if cam:
 			var cam_basis := cam.global_transform.basis
@@ -79,7 +77,6 @@ func _physics_process(delta: float) -> void:
 			input_dir = Vector3(raw_input.x, 0, raw_input.y)
 
 	elif has_move_target:
-		# Simple straight-line movement to target (reliable)
 		var to_target := move_target - global_position
 		to_target.y = 0
 		if to_target.length() < 0.5:
@@ -87,23 +84,18 @@ func _physics_process(delta: float) -> void:
 		else:
 			input_dir = to_target.normalized()
 
-	# --- Speed ---
 	var is_running := Input.is_key_pressed(KEY_SHIFT)
 	var speed := run_speed if is_running else walk_speed
 
-	# --- Apply horizontal movement ---
 	var target_velocity := input_dir * speed
 	velocity.x = move_toward(velocity.x, target_velocity.x, acceleration * delta)
 	velocity.z = move_toward(velocity.z, target_velocity.z, acceleration * delta)
 
-	# --- Rotate model to face movement direction ---
 	if input_dir.length() > 0.1 and model:
 		var target_angle := atan2(input_dir.x, input_dir.z)
 		model.rotation.y = lerp_angle(model.rotation.y, target_angle, rotation_speed * delta)
 
-	# --- Animation ---
 	_update_animation()
-
 	move_and_slide()
 
 
@@ -112,26 +104,26 @@ func _update_animation() -> void:
 		return
 
 	var horizontal_speed := Vector2(velocity.x, velocity.z).length()
+	var is_running := Input.is_key_pressed(KEY_SHIFT)
 
 	if horizontal_speed > 0.5:
-		if animation_player.has_animation("Walk"):
-			if animation_player.current_animation != "Walk":
-				animation_player.play("Walk")
+		var anim := "sprint" if is_running and animation_player.has_animation("sprint") else "walk"
+		if animation_player.has_animation(anim):
+			if animation_player.current_animation != anim:
+				animation_player.play(anim)
 			animation_player.speed_scale = clampf(horizontal_speed / walk_speed, 0.5, 2.0)
 	else:
-		if animation_player.has_animation("Idle"):
-			if animation_player.current_animation != "Idle":
-				animation_player.play("Idle")
+		if animation_player.has_animation("idle"):
+			if animation_player.current_animation != "idle":
+				animation_player.play("idle")
 		else:
 			animation_player.stop()
 
 
 func _input(event: InputEvent) -> void:
-	# Skip when Ctrl held (reporter mode)
 	if Input.is_key_pressed(KEY_TAB):
 		return
 
-	# Click-to-move via raycast to ground
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_click_to_move(event.position)
@@ -145,7 +137,6 @@ func _input(event: InputEvent) -> void:
 func _click_to_move(screen_pos: Vector2) -> void:
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
-		print("[CLICK] No camera found!")
 		return
 
 	var from := cam.project_ray_origin(screen_pos)
@@ -156,9 +147,5 @@ func _click_to_move(screen_pos: Vector2) -> void:
 	if hit != null:
 		move_target = hit as Vector3
 		has_move_target = true
-		print("[CLICK] Target: ", move_target, " nav_agent=", nav_agent != null)
-
 		if nav_agent:
 			nav_agent.target_position = move_target
-	else:
-		print("[CLICK] Ray missed ground plane")

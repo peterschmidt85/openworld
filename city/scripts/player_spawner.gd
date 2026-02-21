@@ -40,7 +40,8 @@ static func spawn(parent: Node3D, pos: Vector3) -> CharacterBody3D:
 		model.scale = Vector3(0.5, 0.5, 0.5)  # adjust scale to fit city
 		player.add_child(model)
 
-		# Find and expose AnimationPlayer if present
+		_fix_skeleton_paths(model)
+
 		var anim_player := _find_animation_player(model)
 		if anim_player:
 			print("Player animations: ", anim_player.get_animation_list())
@@ -57,6 +58,17 @@ static func spawn(parent: Node3D, pos: Vector3) -> CharacterBody3D:
 
 	parent.add_child.call_deferred(player)
 	return player
+
+
+static func _fix_skeleton_paths(node: Node) -> void:
+	if node is Skeleton3D:
+		for child in node.get_children():
+			if child is MeshInstance3D:
+				var mi: MeshInstance3D = child as MeshInstance3D
+				if mi.skeleton == NodePath("") and mi.skin != null:
+					mi.skeleton = NodePath("..")
+	for child in node.get_children():
+		_fix_skeleton_paths(child)
 
 
 static func _find_animation_player(node: Node) -> AnimationPlayer:

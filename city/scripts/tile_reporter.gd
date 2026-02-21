@@ -90,12 +90,9 @@ func setup(gm: GridMap, cam: Camera3D) -> void:
 
 	_create_help_panel(canvas)
 
-	_write_session_header()
-	_save_meta()
-
 	process_priority = -10
 	set_process_input(true)
-	print("Feedback journal: session %d → %s" % [session_id, session_path.get_file()])
+	print("Feedback journal: session %d (created on first feedback)" % session_id)
 
 
 # =========================================================
@@ -288,6 +285,11 @@ func _create_help_panel(canvas: CanvasLayer) -> void:
 		+ "  Tab + Esc        Clear selection\n"
 		+ "  Esc              Cancel typing\n"
 		+ "\n"
+		+ "ATMOSPHERE\n"
+		+ "\n"
+		+ "  N                Toggle day / night\n"
+		+ "  F                Toggle fog\n"
+		+ "\n"
 		+ "  H                Toggle this help"
 	)
 	help_panel.add_child(label)
@@ -299,14 +301,15 @@ func _create_help_panel(canvas: CanvasLayer) -> void:
 # =========================================================
 
 func _write_feedback_multi(cells: Array[Vector3i], user_text: String) -> void:
+	if not has_feedback:
+		has_feedback = true
+		_write_session_header()
+		_save_meta()
 	var entry := ""
 	for cell in cells:
 		entry += _cell_info_string(cell) + "\n"
 	entry += "> \"%s\"\n\n" % user_text
 	_append_to_session(entry)
-	if not has_feedback:
-		has_feedback = true
-		_update_session_status("open")
 	var coords := ", ".join(cells.map(func(c: Vector3i) -> String: return "(%d,%d)" % [c.x, c.z]))
 	print("[FEEDBACK] %s: %s" % [coords, user_text])
 
@@ -359,7 +362,7 @@ func _write_session_header() -> void:
 
 	var timestamp: String = Time.get_datetime_string_from_system()
 	file.store_string("Session %d | %s | seed:42\n" % [session_id, timestamp])
-	file.store_string("STATUS: clean\n")
+	file.store_string("STATUS: open\n")
 	file.store_string("=" .repeat(70) + "\n\n")
 
 	file.store_string("MAP DUMP (tile_id.orient per cell, . = empty):\n")
@@ -386,22 +389,6 @@ func _write_session_header() -> void:
 	file.close()
 
 
-func _update_session_status(new_status: String) -> void:
-	if not FileAccess.file_exists(session_path):
-		return
-	var file := FileAccess.open(session_path, FileAccess.READ)
-	if file == null:
-		return
-	var content := file.get_as_text()
-	file.close()
-	content = content.replace("STATUS: clean", "STATUS: " + new_status).replace("STATUS: open", "STATUS: " + new_status).replace("STATUS: resolved", "STATUS: " + new_status)
-	file = FileAccess.open(session_path, FileAccess.WRITE)
-	if file:
-		file.store_string(content)
-		file.close()
-	_save_meta()
-
-
 # =========================================================
 # Meta: session counter + status index
 # =========================================================
@@ -422,10 +409,7 @@ func _save_meta() -> void:
 	meta["next_session"] = session_id + 1
 	if not meta.has("sessions"):
 		meta["sessions"] = {}
-	var status := "clean"
-	if has_feedback:
-		status = "open"
-	meta["sessions"][str(session_id)] = status
+	meta["sessions"][str(session_id)] = "open"
 	var file := FileAccess.open(meta_path, FileAccess.WRITE)
 	if file:
 		file.store_string(JSON.stringify(meta, "  "))

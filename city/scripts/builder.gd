@@ -92,6 +92,15 @@ func _ready():
 	get_parent().add_child.call_deferred(reporter)
 	reporter.setup.call_deferred(gridmap, view_camera)
 
+	# Atmosphere (day/night + fog)
+	var atmo_script := load("res://scripts/atmosphere.gd")
+	var atmo := Node.new()
+	atmo.name = "Atmosphere"
+	atmo.set_script(atmo_script)
+	get_parent().add_child.call_deferred(atmo)
+	var sun_node: DirectionalLight3D = get_parent().get_node("Sun")
+	atmo.setup.call_deferred(sun_node, view_camera, gridmap)
+
 
 func _load_models(mesh_library: MeshLibrary, dir_path: String, prefix: String) -> Array[int]:
 	var ids: Array[int] = []

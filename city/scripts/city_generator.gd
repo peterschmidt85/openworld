@@ -61,6 +61,7 @@ func generate(gridmap: GridMap) -> void:
 
 	_generate_districts()
 	_plan_roads()
+	_trim_dead_end_roads()
 	_plan_sidewalks()
 	_plan_blocks()
 	_resolve_tiles(gridmap)
@@ -102,6 +103,8 @@ func _generate_districts() -> void:
 
 
 func _is_plaza(x: int, z: int) -> bool:
+	if x % road_spacing == 0 or z % road_spacing == 0:
+		return false
 	for p in [Rect2i(int(grid_size*0.55), int(grid_size*0.3), 3, 3),
 			  Rect2i(int(grid_size*0.35), int(grid_size*0.55), 2, 2),
 			  Rect2i(int(grid_size*0.65), int(grid_size*0.6), 2, 3)]:
@@ -131,6 +134,21 @@ func _plan_roads() -> void:
 			else:
 				plan[pos] = Cell.EMPTY
 
+
+func _trim_dead_end_roads() -> void:
+	var changed := true
+	while changed:
+		changed = false
+		for pos in plan.keys():
+			if plan[pos] != Cell.ROAD:
+				continue
+			var count := 0
+			for off in [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]:
+				if plan.get(pos + off, Cell.WATER) == Cell.ROAD:
+					count += 1
+			if count <= 1:
+				plan[pos] = Cell.SIDEWALK
+				changed = true
 
 
 # =========================================================
