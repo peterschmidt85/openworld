@@ -1,0 +1,15 @@
+# Kenney 3D City
+
+godot := "/opt/homebrew/bin/godot"
+
+# Run the game
+run:
+    {{godot}} --path {{justfile_directory()}} res://scenes/main.tscn
+
+# Open in Godot editor
+edit:
+    {{godot}} --path {{justfile_directory()}} -e
+
+# Import resources
+import:
+    {{godot}} --headless --path {{justfile_directory()}} --import
