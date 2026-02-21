@@ -79,10 +79,17 @@ func _ready():
 	_create_ground(city_gen.grid_size)
 	_create_water(city_gen.grid_size)
 
+	# Navigation mesh for pathfinding
+	_create_navigation(city_gen)
+
 	# Spawn player
 	var spawn_x: float = city_gen.road_spacing / 2.0 + 1
 	var spawn_z: float = city_gen.grid_size / 2.0
 	player = PlayerSpawner.spawn(get_parent(), Vector3(spawn_x, 1.0, spawn_z))
+	player.set("pathfinder", pathfinder)
+
+	# Spawn NPCs
+	_spawn_npcs(city_gen)
 
 	# Feedback journal
 	var reporter_script := load("res://scripts/tile_reporter.gd")
@@ -189,6 +196,93 @@ func _create_water(city_size: int) -> void:
 	water.material_override = mat
 	water.position = Vector3(bay_start + city_size * 0.25, -0.15, city_size / 2.0)
 	get_parent().add_child.call_deferred(water)
+
+
+var pathfinder: AStarGrid2D = null
+
+func _create_navigation(city_gen) -> void:
+	var plan: Dictionary = city_gen.plan
+	var CellType = city_gen.Cell
+	var grid_size: int = city_gen.grid_size
+	var walkable := [CellType.ROAD, CellType.SIDEWALK, CellType.PARK, CellType.PLAZA]
+
+	pathfinder = AStarGrid2D.new()
+	pathfinder.region = Rect2i(0, 0, grid_size, grid_size)
+	pathfinder.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
+	pathfinder.update()
+
+	var walkable_count := 0
+	for x in range(grid_size):
+		for z in range(grid_size):
+			var pos := Vector2i(x, z)
+			if plan.get(pos, CellType.WATER) in walkable:
+				walkable_count += 1
+			else:
+				pathfinder.set_point_solid(pos, true)
+
+	print("Pathfinder: %d walkable, %d blocked" % [walkable_count, grid_size * grid_size - walkable_count])
+
+
+func _spawn_npcs(city_gen) -> void:
+	var npc_spawner_script = load("res://scripts/npc_spawner.gd")
+	var plan: Dictionary = city_gen.plan
+	var district_map: Dictionary = city_gen.district_map
+	var CellType = city_gen.Cell
+	var DistrictType = city_gen.District
+
+	var sidewalk_cells: Array[Vector2i] = []
+	var entrance_cells: Array[Dictionary] = []
+
+	for pos in plan:
+		if plan[pos] == CellType.SIDEWALK:
+			sidewalk_cells.append(pos)
+			# Check if adjacent to a building (candidate for stationary NPC)
+			for off in [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]:
+				if plan.get(pos + off, CellType.WATER) == CellType.BUILDING:
+					# Face toward the nearest road
+					var facing := 0.0
+					for road_off in [Vector2i(1,0), Vector2i(-1,0), Vector2i(0,1), Vector2i(0,-1)]:
+						if plan.get(pos + road_off, CellType.WATER) == CellType.ROAD:
+							facing = atan2(float(road_off.x), float(road_off.y))
+							break
+					entrance_cells.append({"pos": pos, "facing": facing})
+					break
+
+	# Wandering NPCs (~30), biased toward downtown/commercial
+	var wander_count := 0
+	var downtown_sidewalks: Array[Vector2i] = []
+	var other_sidewalks: Array[Vector2i] = []
+	for cell in sidewalk_cells:
+		var district = district_map.get(cell, DistrictType.RESIDENTIAL)
+		if district == DistrictType.DOWNTOWN or district == DistrictType.COMMERCIAL:
+			downtown_sidewalks.append(cell)
+		else:
+			other_sidewalks.append(cell)
+
+	var wander_pool: Array[Vector2i] = []
+	wander_pool.append_array(downtown_sidewalks)
+	wander_pool.append_array(downtown_sidewalks)
+	wander_pool.append_array(other_sidewalks)
+	wander_pool.shuffle()
+
+	for i in range(mini(30, wander_pool.size())):
+		var cell: Vector2i = wander_pool[i]
+		var pos := Vector3(cell.x + 0.5, 0.05, cell.y + 0.5)
+		npc_spawner_script.spawn_wanderer(get_parent(), pos, sidewalk_cells, pathfinder)
+		wander_count += 1
+
+	# Stationary NPCs (~20) at building entrances
+	entrance_cells.shuffle()
+	var stationary_count := 0
+	for i in range(mini(20, entrance_cells.size())):
+		var entry: Dictionary = entrance_cells[i]
+		var cell: Vector2i = entry["pos"]
+		var facing: float = entry["facing"]
+		var pos := Vector3(cell.x + 0.5, 0.05, cell.y + 0.5)
+		npc_spawner_script.spawn_stationary(get_parent(), pos, facing)
+		stationary_count += 1
+
+	print("NPCs spawned: %d wandering, %d stationary" % [wander_count, stationary_count])
 
 
 func get_mesh(packed_scene) -> Mesh:
