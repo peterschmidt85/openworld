@@ -16,3 +16,6 @@ mono_crash.*.json
 
 # Kenney ignores
 build/
+
+# Session reports (generated at runtime)
+reports/

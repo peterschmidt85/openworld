@@ -127,9 +127,9 @@ func _update_animation() -> void:
 
 
 func _input(event: InputEvent) -> void:
-	# Log all mouse events
-	if event is InputEventMouseButton:
-		print("[MOUSE] button=", event.button_index, " pressed=", event.pressed, " pos=", event.position)
+	# Skip when Ctrl held (reporter mode)
+	if Input.is_key_pressed(KEY_TAB):
+		return
 
 	# Click-to-move via raycast to ground
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
