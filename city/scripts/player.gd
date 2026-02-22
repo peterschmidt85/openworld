@@ -8,9 +8,12 @@ extends CharacterBody3D
 @export var rotation_speed := 10.0
 
 var pathfinder: AStarGrid2D = null
+var building_entrances: Dictionary = {}
 var path_points: PackedVector2Array = PackedVector2Array()
 var path_index := 0
 var _path_log_counter := 0
+var _approach_target: Node3D = null
+var _approach_building_pos := Vector3.INF
 
 var gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 var model: Node3D = null
@@ -61,6 +64,8 @@ func _physics_process(delta: float) -> void:
 	if raw_input.length() > 0:
 		raw_input = raw_input.normalized()
 		path_points = PackedVector2Array()
+		_approach_target = null
+		_approach_building_pos = Vector3.INF
 
 		var cam := get_viewport().get_camera_3d()
 		if cam:
@@ -76,6 +81,26 @@ func _physics_process(delta: float) -> void:
 			input_dir = Vector3(raw_input.x, 0, raw_input.y)
 
 	elif path_points.size() > 0 and path_index < path_points.size():
+		if _approach_target and is_instance_valid(_approach_target):
+			var dist_to := global_position.distance_to(_approach_target.global_position)
+			if dist_to < 0.8:
+				path_points = PackedVector2Array()
+				_approach_target = null
+				velocity.x = 0
+				velocity.z = 0
+				_update_animation()
+				return
+
+		if _approach_building_pos != Vector3.INF:
+			var dist_to := global_position.distance_to(_approach_building_pos)
+			if dist_to < 0.8:
+				path_points = PackedVector2Array()
+				_approach_building_pos = Vector3.INF
+				velocity.x = 0
+				velocity.z = 0
+				_update_animation()
+				return
+
 		# Direct position movement along A* path (no collision)
 		var target_cell := path_points[path_index]
 		var target_pos := Vector3(target_cell.x + 0.5, global_position.y, target_cell.y + 0.5)
@@ -153,14 +178,35 @@ func _click_to_move(screen_pos: Vector2) -> void:
 	if cam == null:
 		return
 
-	var from := cam.project_ray_origin(screen_pos)
-	var dir := cam.project_ray_normal(screen_pos)
-	var plane := Plane(Vector3.UP, 0)
-	var hit: Variant = plane.intersects_ray(from, dir)
-	if hit == null:
-		return
+	var ray_from := cam.project_ray_origin(screen_pos)
+	var ray_dir := cam.project_ray_normal(screen_pos)
 
-	var target_world: Vector3 = hit as Vector3
+	var target_world: Vector3
+	var clicked_npc: CharacterBody3D = null
+	var clicked_building := false
+	_approach_target = null
+	_approach_building_pos = Vector3.INF
+	var space := get_world_3d().direct_space_state
+	if space == null:
+		return
+	var query := PhysicsRayQueryParameters3D.create(ray_from, ray_from + ray_dir * 200.0, 6)
+	query.exclude = [get_rid()]
+	var ray_result := space.intersect_ray(query)
+	if not ray_result.is_empty():
+		var collider = ray_result["collider"]
+		if collider is CharacterBody3D:
+			target_world = collider.global_position
+			clicked_npc = collider
+			_approach_target = collider
+		else:
+			target_world = ray_result["position"]
+			clicked_building = true
+	else:
+		var plane := Plane(Vector3.UP, 0)
+		var ground_hit: Variant = plane.intersects_ray(ray_from, ray_dir)
+		if ground_hit == null:
+			return
+		target_world = ground_hit as Vector3
 	var from_cell := Vector2i(int(floor(global_position.x)), int(floor(global_position.z)))
 	var to_cell := Vector2i(int(floor(target_world.x)), int(floor(target_world.z)))
 
@@ -171,18 +217,68 @@ func _click_to_move(screen_pos: Vector2) -> void:
 
 	if pathfinder.is_point_solid(from_cell):
 		from_cell = _nearest_walkable(from_cell)
-	if pathfinder.is_point_solid(to_cell):
+	if clicked_building:
+		var entrance := _find_building_entrance(to_cell)
+		if entrance != Vector2i(-1, -1):
+			to_cell = entrance
+			_approach_building_pos = Vector3(_last_found_building_cell.x + 0.5, 0, _last_found_building_cell.y + 0.5)
+		elif pathfinder.is_point_solid(to_cell):
+			to_cell = _nearest_walkable(to_cell)
+	elif pathfinder.is_point_solid(to_cell):
 		to_cell = _nearest_walkable(to_cell)
 
 	if from_cell == to_cell:
 		return
+
+	var blocked: Array[Vector2i] = []
+	for npc in get_tree().get_nodes_in_group("npc"):
+		if npc == clicked_npc:
+			continue
+		var c := Vector2i(int(floor(npc.global_position.x)), int(floor(npc.global_position.z)))
+		if c != from_cell and not pathfinder.is_point_solid(c):
+			pathfinder.set_point_solid(c, true)
+			blocked.append(c)
+
+	if pathfinder.is_point_solid(to_cell):
+		to_cell = _nearest_walkable(to_cell)
+	if from_cell == to_cell:
+		for c in blocked:
+			pathfinder.set_point_solid(c, false)
+		return
+
 	path_points = pathfinder.get_point_path(from_cell, to_cell)
 	path_index = 0
+
+	if _approach_building_pos != Vector3.INF and path_points.size() > 0:
+		path_points.append(Vector2(_last_found_building_cell.x, _last_found_building_cell.y))
+
+	for c in blocked:
+		pathfinder.set_point_solid(c, false)
+
 	var dist := absi(from_cell.x - to_cell.x) + absi(from_cell.y - to_cell.y)
 	if path_points.size() == 0:
 		print("[PATH] FAILED %s → %s (no path! dist=%d)" % [from_cell, to_cell, dist])
 	else:
 		print("[PATH] %s → %s (%d steps, dist=%d, world=(%.0f,%.0f)→(%.0f,%.0f))" % [from_cell, to_cell, path_points.size(), dist, global_position.x, global_position.z, target_world.x, target_world.z])
+
+
+var _last_found_building_cell := Vector2i(-1, -1)
+
+func _find_building_entrance(cell: Vector2i) -> Vector2i:
+	_last_found_building_cell = Vector2i(-1, -1)
+	if building_entrances.has(cell):
+		var e: Vector2i = building_entrances[cell]
+		if not pathfinder.is_point_solid(e):
+			_last_found_building_cell = cell
+			return e
+	for off in [Vector2i(0, -1), Vector2i(0, 1), Vector2i(-1, 0), Vector2i(1, 0)]:
+		var neighbor: Vector2i = cell + off
+		if building_entrances.has(neighbor):
+			var e: Vector2i = building_entrances[neighbor]
+			if not pathfinder.is_point_solid(e):
+				_last_found_building_cell = neighbor
+				return e
+	return Vector2i(-1, -1)
 
 
 func _nearest_walkable(cell: Vector2i) -> Vector2i:

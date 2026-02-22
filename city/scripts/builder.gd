@@ -88,8 +88,41 @@ func _ready():
 	player = PlayerSpawner.spawn(get_parent(), Vector3(spawn_x, 1.0, spawn_z))
 	player.set("pathfinder", pathfinder)
 
+	# Building entrance map (building cell → nearest walkable cell in facing direction)
+	var walkable_types = [city_gen.Cell.ROAD, city_gen.Cell.SIDEWALK, city_gen.Cell.PARK, city_gen.Cell.PLAZA]
+	var building_entrances: Dictionary = {}
+	for pos in city_gen.plan:
+		if city_gen.plan[pos] == city_gen.Cell.BUILDING:
+			var rot: int = city_gen._facing_road_rotation(pos.x, pos.y)
+			var off: Vector2i
+			match rot:
+				0: off = Vector2i(0, -1)
+				1: off = Vector2i(1, 0)
+				2: off = Vector2i(0, 1)
+				3: off = Vector2i(-1, 0)
+				_: off = Vector2i(0, -1)
+			for i in range(1, city_gen.road_spacing):
+				var candidate: Vector2i = pos + off * i
+				if city_gen.plan.get(candidate, city_gen.Cell.WATER) in walkable_types:
+					building_entrances[pos] = candidate
+					break
+	player.set("building_entrances", building_entrances)
+	print("Building entrances: %d mapped" % building_entrances.size())
+
 	# Spawn NPCs
 	_spawn_npcs(city_gen)
+
+	# Hover highlight (outline on hover)
+	var bldg_cells: Dictionary = {}
+	for pos in city_gen.plan:
+		if city_gen.plan[pos] == city_gen.Cell.BUILDING:
+			bldg_cells[pos] = true
+	var hover_script := load("res://scripts/hover_highlight.gd")
+	var hover_node := Node3D.new()
+	hover_node.name = "HoverHighlight"
+	hover_node.set_script(hover_script)
+	get_parent().add_child.call_deferred(hover_node)
+	hover_node.setup.call_deferred(view_camera, gridmap, bldg_cells)
 
 	# Feedback journal
 	var reporter_script := load("res://scripts/tile_reporter.gd")
@@ -148,6 +181,7 @@ func _create_collisions(gridmap: GridMap) -> void:
 	var shape_cache: Dictionary = {}
 	var collision_root := StaticBody3D.new()
 	collision_root.name = "CityCollision"
+	collision_root.collision_layer = 5
 	var col_count := 0
 
 	for cell in gridmap.get_used_cells():

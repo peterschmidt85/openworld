@@ -139,8 +139,26 @@ func _pick_wander_target() -> void:
 	var target: Vector2i = nearby[randi() % nearby.size()]
 	target = target.clamp(region.position, region.position + region.size - Vector2i.ONE)
 
+	var blocked: Array[Vector2i] = []
+	for other in get_tree().get_nodes_in_group("npc"):
+		if other == self:
+			continue
+		var c := Vector2i(int(floor(other.global_position.x)), int(floor(other.global_position.z)))
+		if c != my_cell and not pathfinder.is_point_solid(c):
+			pathfinder.set_point_solid(c, true)
+			blocked.append(c)
+	var players := get_tree().get_nodes_in_group("player")
+	if players.size() > 0:
+		var pc := Vector2i(int(floor(players[0].global_position.x)), int(floor(players[0].global_position.z)))
+		if pc != my_cell and not pathfinder.is_point_solid(pc):
+			pathfinder.set_point_solid(pc, true)
+			blocked.append(pc)
+
 	path_points = pathfinder.get_point_path(my_cell, target)
 	path_index = 0
+
+	for c in blocked:
+		pathfinder.set_point_solid(c, false)
 
 
 func _nearest_walkable_cell(cell: Vector2i) -> Vector2i:

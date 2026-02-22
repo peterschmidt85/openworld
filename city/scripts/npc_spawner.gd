@@ -46,7 +46,8 @@ static func _create_base(pos: Vector3) -> CharacterBody3D:
 	npc.name = "NPC"
 	npc.script = NPC_SCRIPT
 	npc.position = pos
-	npc.collision_layer = 0
+	npc.add_to_group("npc")
+	npc.collision_layer = 2
 	npc.collision_mask = 1
 
 	var col_shape := CollisionShape3D.new()

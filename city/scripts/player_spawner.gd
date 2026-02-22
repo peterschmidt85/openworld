@@ -12,8 +12,8 @@ static func spawn(parent: Node3D, pos: Vector3) -> CharacterBody3D:
 	player.name = "Player"
 	player.script = PLAYER_SCRIPT
 	player.position = pos
-	player.collision_layer = 1
-	player.collision_mask = 1
+	player.collision_layer = 3
+	player.collision_mask = 3
 
 	# Collision shape (capsule)
 	var col_shape := CollisionShape3D.new()
