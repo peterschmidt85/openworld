@@ -54,12 +54,15 @@ func _physics_process(delta: float) -> void:
 
 	var input_dir := Vector3.ZERO
 
-	# WASD — direct movement with collision
+	# WASD — suppress while Tab held or a UI text field has focus
 	var raw_input := Vector2.ZERO
-	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):    raw_input.y -= 1
-	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):  raw_input.y += 1
-	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):  raw_input.x -= 1
-	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): raw_input.x += 1
+	var focus := get_viewport().gui_get_focus_owner()
+	var ui_typing := focus is LineEdit or focus is TextEdit
+	if not Input.is_key_pressed(KEY_TAB) and not ui_typing:
+		if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):    raw_input.y -= 1
+		if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):  raw_input.y += 1
+		if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):  raw_input.x -= 1
+		if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT): raw_input.x += 1
 
 	if raw_input.length() > 0:
 		raw_input = raw_input.normalized()

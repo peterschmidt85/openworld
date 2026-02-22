@@ -151,6 +151,14 @@ func _ready():
 	var sun_node: DirectionalLight3D = get_parent().get_node("Sun")
 	atmo.setup.call_deferred(sun_node, view_camera, gridmap)
 
+	# AI Chat (Tab+A)
+	var ai_chat_script := load("res://scripts/ai_chat.gd")
+	var ai_chat := Control.new()
+	ai_chat.name = "AIChat"
+	ai_chat.set_script(ai_chat_script)
+	get_parent().add_child.call_deferred(ai_chat)
+	ai_chat.setup.call_deferred(view_camera, city_gen.plan, city_gen.district_map, city_gen.grid_size, city_gen.Cell, city_gen.District)
+
 
 func _load_models(mesh_library: MeshLibrary, dir_path: String, prefix: String) -> Array[int]:
 	var ids: Array[int] = []
