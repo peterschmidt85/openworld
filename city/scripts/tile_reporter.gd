@@ -158,6 +158,11 @@ func _process(_delta: float) -> void:
 
 
 func _input(event: InputEvent) -> void:
+	var focus := get_viewport().gui_get_focus_owner()
+	if focus is LineEdit and focus != text_input:
+		return
+	if focus is TextEdit:
+		return
 	# H → toggle help
 	if event is InputEventKey and event.pressed and event.keycode == KEY_H and not text_input.visible:
 		help_panel.visible = not help_panel.visible

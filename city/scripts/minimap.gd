@@ -91,6 +91,9 @@ func _build() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	var focus := get_viewport().gui_get_focus_owner()
+	if focus is LineEdit or focus is TextEdit:
+		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_M:
 		var show := not svc.visible
 		svc.visible = show

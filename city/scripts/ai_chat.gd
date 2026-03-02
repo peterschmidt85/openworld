@@ -1,6 +1,7 @@
 extends Control
 
-## Ask AI: Tab+A opens a chat panel that sends game context to OpenAI.
+## Ask AI: Tab+A opens a chat panel with OpenAI tool-calling agent.
+## The model reasons with low-level query tools and issues move_to(x,z) actions.
 
 var canvas: CanvasLayer
 var panel: PanelContainer
@@ -18,22 +19,31 @@ var district_map: Dictionary = {}
 var grid_size: int = 60
 var cell_enum = null
 var district_enum = null
+var pathfinder: AStarGrid2D = null
 
 var conversation: Array = []
 var waiting := false
+var agent_iterations: int = 0
+const MAX_AGENT_ITERATIONS := 5
 
 const DISTRICT_NAMES := {
 	0: "Water", 1: "Downtown", 2: "Commercial", 3: "Residential",
 	4: "Industrial", 5: "Park", 6: "Plaza", 7: "Waterfront"
 }
 
+const CELL_NAMES := {
+	0: "empty", 1: "road", 2: "building", 3: "sidewalk",
+	4: "park", 5: "plaza", 6: "water", 7: "grass"
+}
 
-func setup(camera: Camera3D, p_plan: Dictionary, p_district_map: Dictionary, p_grid_size: int, p_cell_enum, p_district_enum) -> void:
+
+func setup(camera: Camera3D, p_plan: Dictionary, p_district_map: Dictionary, p_grid_size: int, p_cell_enum, p_district_enum, p_pathfinder: AStarGrid2D) -> void:
 	city_plan = p_plan
 	district_map = p_district_map
 	grid_size = p_grid_size
 	cell_enum = p_cell_enum
 	district_enum = p_district_enum
+	pathfinder = p_pathfinder
 
 	api_key = OS.get_environment("OPENAI_API_KEY")
 	if api_key.strip_edges() == "":
@@ -53,6 +63,10 @@ func setup(camera: Camera3D, p_plan: Dictionary, p_district_map: Dictionary, p_g
 	set_process_input(true)
 	print("AI Chat ready (API key %s)" % ("set" if api_key.strip_edges() != "" else "MISSING"))
 
+
+# =========================================================
+# UI
+# =========================================================
 
 func _build_ui() -> void:
 	canvas = CanvasLayer.new()
@@ -92,7 +106,6 @@ func _build_ui() -> void:
 	vbox.add_theme_constant_override("separation", 8)
 	panel.add_child(vbox)
 
-	# Title bar
 	var title_bar := HBoxContainer.new()
 	vbox.add_child(title_bar)
 
@@ -112,12 +125,10 @@ func _build_ui() -> void:
 	hint.add_theme_color_override("font_color", Color(0.5, 0.52, 0.58))
 	title_bar.add_child(hint)
 
-	# Separator
 	var sep := HSeparator.new()
 	sep.add_theme_constant_override("separation", 4)
 	vbox.add_child(sep)
 
-	# Error banner (hidden by default)
 	error_banner = Label.new()
 	error_banner.add_theme_font_size_override("font_size", 13)
 	error_banner.add_theme_color_override("font_color", Color(1.0, 0.35, 0.3))
@@ -125,7 +136,6 @@ func _build_ui() -> void:
 	error_banner.visible = false
 	vbox.add_child(error_banner)
 
-	# Chat log
 	scroll = ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -141,7 +151,6 @@ func _build_ui() -> void:
 	chat_log.add_theme_color_override("default_color", Color(0.82, 0.84, 0.9))
 	scroll.add_child(chat_log)
 
-	# Thinking indicator
 	thinking_label = Label.new()
 	thinking_label.text = "Thinking..."
 	thinking_label.add_theme_font_size_override("font_size", 13)
@@ -149,7 +158,6 @@ func _build_ui() -> void:
 	thinking_label.visible = false
 	vbox.add_child(thinking_label)
 
-	# Input field
 	input_field = LineEdit.new()
 	input_field.placeholder_text = "Ask something about the city..."
 	input_field.add_theme_font_size_override("font_size", 14)
@@ -175,8 +183,11 @@ func _build_ui() -> void:
 	vbox.add_child(input_field)
 
 
+# =========================================================
+# Input
+# =========================================================
+
 func _input(event: InputEvent) -> void:
-	# Tab+A toggles the panel
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_A and Input.is_key_pressed(KEY_TAB):
 			_toggle_panel()
@@ -186,7 +197,6 @@ func _input(event: InputEvent) -> void:
 	if not panel.visible:
 		return
 
-	# Escape closes the panel
 	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
 		_toggle_panel()
 		get_viewport().set_input_as_handled()
@@ -222,6 +232,10 @@ func _process(_delta: float) -> void:
 	thinking_label.text = "Thinking" + ".".repeat(dots)
 
 
+# =========================================================
+# Chat submission and API requests
+# =========================================================
+
 func _on_text_submitted(text: String) -> void:
 	var question := text.strip_edges()
 	if question == "" or waiting:
@@ -233,24 +247,25 @@ func _on_text_submitted(text: String) -> void:
 
 	input_field.text = ""
 	_append_user_message(question)
-	_send_request(question)
+
+	conversation.append({"role": "user", "content": question})
+	agent_iterations = 0
+	_fire_api_request()
 
 
-func _send_request(question: String) -> void:
+func _fire_api_request() -> void:
 	waiting = true
 	thinking_label.visible = true
 
 	var system_prompt := _build_system_prompt()
-
-	conversation.append({"role": "user", "content": question})
-
 	var messages: Array = [{"role": "system", "content": system_prompt}]
 	messages.append_array(conversation)
 
 	var body := JSON.stringify({
 		"model": "gpt-4o-mini",
 		"messages": messages,
-		"max_tokens": 300,
+		"max_tokens": 500,
+		"tools": _get_tools(),
 	})
 
 	var headers := [
@@ -263,7 +278,6 @@ func _send_request(question: String) -> void:
 		waiting = false
 		thinking_label.visible = false
 		_append_error("HTTP request failed to start (error %d)." % err)
-		conversation.pop_back()
 
 
 func _on_request_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
@@ -281,8 +295,6 @@ func _on_request_completed(result: int, response_code: int, _headers: PackedStri
 			HTTPRequest.RESULT_REQUEST_FAILED: reason = "Request failed"
 			HTTPRequest.RESULT_TIMEOUT: reason = "Request timed out"
 		_append_error("%s (result %d)." % [reason, result])
-		if conversation.size() > 0 and conversation[-1]["role"] == "user":
-			conversation.pop_back()
 		return
 
 	var text := body.get_string_from_utf8()
@@ -298,39 +310,385 @@ func _on_request_completed(result: int, response_code: int, _headers: PackedStri
 			_append_error("API error %d: %s" % [response_code, detail])
 		else:
 			_append_error("API returned status %d." % response_code)
-		if conversation.size() > 0 and conversation[-1]["role"] == "user":
-			conversation.pop_back()
 		return
 
 	var json: Variant = JSON.parse_string(text)
 	if json == null or not json is Dictionary:
 		_append_error("Failed to parse API response.")
-		if conversation.size() > 0 and conversation[-1]["role"] == "user":
-			conversation.pop_back()
 		return
 
 	var choices: Variant = json.get("choices", [])
-	if choices is Array and choices.size() > 0:
-		var message: Variant = choices[0].get("message", {})
-		if message is Dictionary:
-			var reply: String = message.get("content", "")
-			reply = reply.strip_edges()
-			if reply != "":
-				conversation.append({"role": "assistant", "content": reply})
-				_append_ai_message(reply)
-				return
+	if not choices is Array or choices.size() == 0:
+		_append_error("No choices in API response.")
+		return
 
-	_append_error("No response content from API.")
-	if conversation.size() > 0 and conversation[-1]["role"] == "user":
-		conversation.pop_back()
+	var message: Variant = choices[0].get("message", {})
+	if not message is Dictionary:
+		_append_error("Invalid message in API response.")
+		return
 
+	var tool_calls: Variant = message.get("tool_calls", null)
+
+	if tool_calls is Array and tool_calls.size() > 0:
+		_handle_tool_calls(message, tool_calls)
+		return
+
+	var reply: String = str(message.get("content", "")).strip_edges()
+	if reply != "":
+		conversation.append({"role": "assistant", "content": reply})
+		_append_ai_message(reply)
+	else:
+		_append_error("Empty response from API.")
+
+
+func _handle_tool_calls(assistant_message: Dictionary, tool_calls: Array) -> void:
+	# Append the assistant message (with tool_calls) to conversation as-is
+	var conv_msg: Dictionary = {"role": "assistant"}
+	var content: Variant = assistant_message.get("content", null)
+	if content != null and str(content).strip_edges() != "":
+		conv_msg["content"] = str(content)
+	else:
+		conv_msg["content"] = null
+
+	var tc_array: Array = []
+	for tc in tool_calls:
+		tc_array.append({
+			"id": str(tc.get("id", "")),
+			"type": "function",
+			"function": {
+				"name": str(tc.get("function", {}).get("name", "")),
+				"arguments": str(tc.get("function", {}).get("arguments", "{}")),
+			}
+		})
+	conv_msg["tool_calls"] = tc_array
+	conversation.append(conv_msg)
+
+	# Execute each tool and append results
+	for tc in tool_calls:
+		var func_info: Variant = tc.get("function", {})
+		var tool_name: String = str(func_info.get("name", ""))
+		var args_str: String = str(func_info.get("arguments", "{}"))
+		var tool_id: String = str(tc.get("id", ""))
+
+		var args: Variant = JSON.parse_string(args_str)
+		if args == null:
+			args = {}
+
+		_append_action("%s(%s)" % [tool_name, args_str])
+		print("[AGENT] tool_call: %s(%s)" % [tool_name, args_str])
+
+		var result_str := _execute_tool(tool_name, args)
+		print("[AGENT] result: %s" % result_str)
+
+		conversation.append({
+			"role": "tool",
+			"tool_call_id": tool_id,
+			"content": result_str,
+		})
+
+	# Continue the agent loop
+	agent_iterations += 1
+	if agent_iterations >= MAX_AGENT_ITERATIONS:
+		_append_error("Agent reached max iterations (%d). Stopping." % MAX_AGENT_ITERATIONS)
+		return
+
+	_fire_api_request()
+
+
+# =========================================================
+# Tool definitions (OpenAI format)
+# =========================================================
+
+func _get_tools() -> Array:
+	return [
+		{
+			"type": "function",
+			"function": {
+				"name": "move_to",
+				"description": "Walk the player to a grid cell via A* pathfinding. Like clicking on the ground. Returns path length or error if unreachable.",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"x": {"type": "integer", "description": "Grid X coordinate (0 to %d)" % (grid_size - 1)},
+						"z": {"type": "integer", "description": "Grid Z coordinate (0 to %d)" % (grid_size - 1)},
+					},
+					"required": ["x", "z"],
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": {
+				"name": "get_player_info",
+				"description": "Get the player's current position, district, time of day, and fog state.",
+				"parameters": {"type": "object", "properties": {}},
+			},
+		},
+		{
+			"type": "function",
+			"function": {
+				"name": "list_npcs",
+				"description": "List NPCs within a radius of the player. Returns positions, modes (wander/stationary), and distances.",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"radius": {"type": "integer", "description": "Search radius in grid tiles (default 20)"},
+					},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": {
+				"name": "describe_surroundings",
+				"description": "Describe what districts and tile types are around the player within a radius. Returns district names with coordinate ranges so you can pick a move_to target.",
+				"parameters": {
+					"type": "object",
+					"properties": {
+						"radius": {"type": "integer", "description": "Search radius in grid tiles (default 15)"},
+					},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": {
+				"name": "toggle_time",
+				"description": "Toggle between day and night. Returns the new time state.",
+				"parameters": {"type": "object", "properties": {}},
+			},
+		},
+		{
+			"type": "function",
+			"function": {
+				"name": "toggle_fog",
+				"description": "Toggle fog on/off. Returns the new fog state.",
+				"parameters": {"type": "object", "properties": {}},
+			},
+		},
+	]
+
+
+# =========================================================
+# Tool execution
+# =========================================================
+
+func _execute_tool(tool_name: String, args: Variant) -> String:
+	if not args is Dictionary:
+		args = {}
+	match tool_name:
+		"move_to":
+			return _tool_move_to(args)
+		"get_player_info":
+			return _tool_get_player_info()
+		"list_npcs":
+			return _tool_list_npcs(args)
+		"describe_surroundings":
+			return _tool_describe_surroundings(args)
+		"toggle_time":
+			return _tool_toggle_time()
+		"toggle_fog":
+			return _tool_toggle_fog()
+		_:
+			return JSON.stringify({"error": "Unknown tool: %s" % tool_name})
+
+
+func _tool_move_to(args: Dictionary) -> String:
+	var x: int = int(args.get("x", -1))
+	var z: int = int(args.get("z", -1))
+
+	if x < 0 or x >= grid_size or z < 0 or z >= grid_size:
+		return JSON.stringify({"error": "Coordinates (%d, %d) out of bounds (grid is %dx%d)" % [x, z, grid_size, grid_size]})
+
+	var players := get_tree().get_nodes_in_group("player")
+	if players.size() == 0:
+		return JSON.stringify({"error": "No player found"})
+	var player: CharacterBody3D = players[0]
+
+	if pathfinder == null:
+		return JSON.stringify({"error": "Pathfinder not available"})
+
+	var region := pathfinder.region
+	var target := Vector2i(x, z).clamp(region.position, region.position + region.size - Vector2i.ONE)
+	var from := Vector2i(int(floor(player.global_position.x)), int(floor(player.global_position.z)))
+	from = from.clamp(region.position, region.position + region.size - Vector2i.ONE)
+
+	if pathfinder.is_point_solid(from):
+		from = _nearest_walkable(from)
+	if pathfinder.is_point_solid(target):
+		var original := target
+		target = _nearest_walkable(target)
+		if pathfinder.is_point_solid(target):
+			return JSON.stringify({"error": "Target (%d, %d) is unreachable (solid tile, no nearby walkable)" % [original.x, original.y]})
+
+	if from == target:
+		return JSON.stringify({"status": "already_there", "x": from.x, "z": from.y})
+
+	var path := pathfinder.get_point_path(from, target)
+	if path.size() == 0:
+		return JSON.stringify({"error": "No path from (%d, %d) to (%d, %d)" % [from.x, from.y, target.x, target.y]})
+
+	player.path_points = path
+	player.path_index = 0
+	player._approach_target = null
+	player._approach_building_pos = Vector3.INF
+
+	return JSON.stringify({"status": "walking", "path_length": path.size(), "from": [from.x, from.y], "to": [target.x, target.y]})
+
+
+func _tool_get_player_info() -> String:
+	var players := get_tree().get_nodes_in_group("player")
+	if players.size() == 0:
+		return JSON.stringify({"error": "No player found"})
+
+	var p: Node3D = players[0]
+	var px := int(floor(p.global_position.x))
+	var pz := int(floor(p.global_position.z))
+	var district_id: int = district_map.get(Vector2i(px, pz), 3)
+	var district_name: String = DISTRICT_NAMES.get(district_id, "Unknown")
+
+	var time_str := "day"
+	var fog_str := "off"
+	var atmo := get_parent().get_node_or_null("Atmosphere")
+	if atmo:
+		if "is_night" in atmo:
+			time_str = "night" if atmo.is_night else "day"
+		if "fog_on" in atmo:
+			fog_str = "on" if atmo.fog_on else "off"
+
+	return JSON.stringify({
+		"x": px, "z": pz,
+		"district": district_name,
+		"time": time_str,
+		"fog": fog_str,
+	})
+
+
+func _tool_list_npcs(args: Dictionary) -> String:
+	var radius: float = float(args.get("radius", 20))
+
+	var players := get_tree().get_nodes_in_group("player")
+	if players.size() == 0:
+		return JSON.stringify({"error": "No player found"})
+	var player_pos := Vector2(players[0].global_position.x, players[0].global_position.z)
+
+	var npcs := get_tree().get_nodes_in_group("npc")
+	var result: Array = []
+	for npc in npcs:
+		var npc_pos := Vector2(npc.global_position.x, npc.global_position.z)
+		var dist := player_pos.distance_to(npc_pos)
+		if dist <= radius:
+			var mode_str := "unknown"
+			if "mode" in npc:
+				mode_str = str(npc.mode)
+			result.append({
+				"x": int(npc_pos.x),
+				"z": int(npc_pos.y),
+				"mode": mode_str,
+				"distance": snappedf(dist, 0.1),
+			})
+
+	result.sort_custom(func(a, b): return a["distance"] < b["distance"])
+	return JSON.stringify({"count": result.size(), "npcs": result})
+
+
+func _tool_describe_surroundings(args: Dictionary) -> String:
+	var radius: int = int(args.get("radius", 15))
+
+	var players := get_tree().get_nodes_in_group("player")
+	if players.size() == 0:
+		return JSON.stringify({"error": "No player found"})
+	var px := int(floor(players[0].global_position.x))
+	var pz := int(floor(players[0].global_position.z))
+
+	# Gather districts with coordinate ranges
+	var district_cells: Dictionary = {}
+	for dx in range(-radius, radius + 1):
+		for dz in range(-radius, radius + 1):
+			var cx := px + dx
+			var cz := pz + dz
+			if cx < 0 or cx >= grid_size or cz < 0 or cz >= grid_size:
+				continue
+			var pos := Vector2i(cx, cz)
+			var d_id: int = district_map.get(pos, -1)
+			if d_id < 0:
+				continue
+			var d_name: String = DISTRICT_NAMES.get(d_id, "Unknown")
+			if not district_cells.has(d_name):
+				district_cells[d_name] = {"min_x": cx, "max_x": cx, "min_z": cz, "max_z": cz, "count": 0, "walkable_example": null}
+			var dc: Dictionary = district_cells[d_name]
+			dc["count"] = dc["count"] + 1
+			if cx < dc["min_x"]: dc["min_x"] = cx
+			if cx > dc["max_x"]: dc["max_x"] = cx
+			if cz < dc["min_z"]: dc["min_z"] = cz
+			if cz > dc["max_z"]: dc["max_z"] = cz
+
+			if dc["walkable_example"] == null:
+				var cell_type: int = city_plan.get(pos, 0)
+				if cell_type in [1, 3, 4, 5]:
+					dc["walkable_example"] = [cx, cz]
+
+	var districts_out: Array = []
+	for d_name in district_cells:
+		var dc: Dictionary = district_cells[d_name]
+		var entry: Dictionary = {
+			"district": d_name,
+			"cells": dc["count"],
+			"x_range": [dc["min_x"], dc["max_x"]],
+			"z_range": [dc["min_z"], dc["max_z"]],
+		}
+		if dc["walkable_example"] != null:
+			entry["walkable_example"] = dc["walkable_example"]
+		districts_out.append(entry)
+
+	return JSON.stringify({
+		"player": [px, pz],
+		"radius": radius,
+		"districts": districts_out,
+	})
+
+
+func _tool_toggle_time() -> String:
+	var atmo := get_parent().get_node_or_null("Atmosphere")
+	if atmo == null:
+		return JSON.stringify({"error": "Atmosphere node not found"})
+	atmo._toggle_day_night()
+	var new_state: String = "night" if atmo.is_night else "day"
+	return JSON.stringify({"time": new_state})
+
+
+func _tool_toggle_fog() -> String:
+	var atmo := get_parent().get_node_or_null("Atmosphere")
+	if atmo == null:
+		return JSON.stringify({"error": "Atmosphere node not found"})
+	atmo._toggle_fog()
+	var new_state: String = "on" if atmo.fog_on else "off"
+	return JSON.stringify({"fog": new_state})
+
+
+func _nearest_walkable(cell: Vector2i) -> Vector2i:
+	var region := pathfinder.region
+	for radius in range(1, 6):
+		for dx in range(-radius, radius + 1):
+			for dz in range(-radius, radius + 1):
+				var c := cell + Vector2i(dx, dz)
+				if c.x >= region.position.x and c.x < region.position.x + region.size.x and c.y >= region.position.y and c.y < region.position.y + region.size.y:
+					if not pathfinder.is_point_solid(c):
+						return c
+	return cell
+
+
+# =========================================================
+# System prompt
+# =========================================================
 
 func _build_system_prompt() -> String:
 	var lines: PackedStringArray = []
-	lines.append("You are an AI assistant embedded in \"Open World City\", a procedural 3D city simulation built in Godot.")
+	lines.append("You are an AI agent controlling a player in \"Open World City\", a procedural 3D city simulation.")
+	lines.append("You have tools to query the game world and move the player. Use query tools first to gather information, then use move_to(x, z) to navigate.")
+	lines.append("")
 	lines.append("Current game state:")
 
-	# Player position and district
 	var players := get_tree().get_nodes_in_group("player")
 	if players.size() > 0:
 		var p: Node3D = players[0]
@@ -340,7 +698,6 @@ func _build_system_prompt() -> String:
 		var district_name: String = DISTRICT_NAMES.get(district_id, "Unknown")
 		lines.append("- Player at grid (%d, %d) in the %s district" % [px, pz, district_name])
 
-	# Atmosphere (sibling node "Atmosphere" set up by builder)
 	var time_str := "day"
 	var fog_str := "clear"
 	var atmo := get_parent().get_node_or_null("Atmosphere")
@@ -350,40 +707,33 @@ func _build_system_prompt() -> String:
 		if "fog_on" in atmo:
 			fog_str = "foggy" if atmo.fog_on else "clear"
 	lines.append("- Time: %s, Weather: %s" % [time_str, fog_str])
+	lines.append("- City: %dx%d grid. Districts: Downtown, Commercial, Residential, Industrial, Park, Plaza, Waterfront" % [grid_size, grid_size])
 
-	# City info
-	lines.append("- City: %dx%d grid with districts: Downtown, Commercial, Residential, Industrial, Park, Plaza, Waterfront" % [grid_size, grid_size])
-
-	# NPCs
 	var npcs := get_tree().get_nodes_in_group("npc")
 	var wander_count := 0
 	var stationary_count := 0
-	var nearby_positions: PackedStringArray = []
-	var player_pos := Vector2.ZERO
-	if players.size() > 0:
-		player_pos = Vector2(players[0].global_position.x, players[0].global_position.z)
-
 	for npc in npcs:
 		if "mode" in npc:
 			if npc.mode == "wander":
 				wander_count += 1
 			else:
 				stationary_count += 1
-		var npc_pos := Vector2(npc.global_position.x, npc.global_position.z)
-		if player_pos.distance_to(npc_pos) < 10.0:
-			nearby_positions.append("(%d,%d)" % [int(npc_pos.x), int(npc_pos.y)])
-
-	lines.append("- NPCs: %d wandering, %d stationary total. %d nearby (within 10 tiles): %s" % [
-		wander_count, stationary_count, nearby_positions.size(),
-		", ".join(nearby_positions) if nearby_positions.size() > 0 else "none"
-	])
+	lines.append("- NPCs: %d wandering, %d stationary" % [wander_count, stationary_count])
 
 	lines.append("")
-	lines.append("Answer the player's questions about the city. You can describe surroundings, give directions, explain what you see, or just chat.")
-	lines.append("Be concise (2-4 sentences) unless asked for detail.")
+	lines.append("Guidelines:")
+	lines.append("- Use describe_surroundings() or get_player_info() to learn where you are before moving.")
+	lines.append("- Use list_npcs() to find NPCs, then move_to their coordinates.")
+	lines.append("- move_to(x, z) walks the player there via pathfinding -- pick walkable coordinates (roads, sidewalks, parks, plazas).")
+	lines.append("- If you cannot fulfill a request (e.g., spawn objects, modify the city), say so upfront.")
+	lines.append("- Be concise in responses (1-3 sentences). Show what you did.")
 
 	return "\n".join(lines)
 
+
+# =========================================================
+# Chat display helpers
+# =========================================================
 
 func _append_user_message(text: String) -> void:
 	chat_log.append_text("[color=#7cacf0]You:[/color] %s\n\n" % _escape_bbcode(text))
@@ -395,10 +745,19 @@ func _append_ai_message(text: String) -> void:
 	_scroll_to_bottom()
 
 
+func _append_action(text: String) -> void:
+	chat_log.append_text("[color=#c4a6e8]> %s[/color]\n" % _escape_bbcode(text))
+	_scroll_to_bottom()
+
+
 func _append_error(text: String) -> void:
 	chat_log.append_text("[color=#f07070]Error:[/color] %s\n\n" % _escape_bbcode(text))
 	_scroll_to_bottom()
 
+
+# =========================================================
+# Utilities
+# =========================================================
 
 func _read_key_from_envrc() -> String:
 	for rel in ["../../.envrc", "../.envrc", ".envrc"]:

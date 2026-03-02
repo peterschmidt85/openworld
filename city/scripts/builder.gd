@@ -157,7 +157,7 @@ func _ready():
 	ai_chat.name = "AIChat"
 	ai_chat.set_script(ai_chat_script)
 	get_parent().add_child.call_deferred(ai_chat)
-	ai_chat.setup.call_deferred(view_camera, city_gen.plan, city_gen.district_map, city_gen.grid_size, city_gen.Cell, city_gen.District)
+	ai_chat.setup.call_deferred(view_camera, city_gen.plan, city_gen.district_map, city_gen.grid_size, city_gen.Cell, city_gen.District, pathfinder)
 
 
 func _load_models(mesh_library: MeshLibrary, dir_path: String, prefix: String) -> Array[int]:
